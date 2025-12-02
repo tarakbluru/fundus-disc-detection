@@ -19,11 +19,9 @@ CLAHE_CLIP_LIMIT = 2.0
 CLAHE_GRID_SIZE = (8, 8)
 GAUSSIAN_BLUR_KERNEL = (5, 5)
 
-# Disc detection parameters
-DISC_BRIGHTNESS_PERCENTILE = 65  # Low value to avoid bright background outside retina
-DISC_MIN_RADIUS = 50
-DISC_MAX_RADIUS = 300
-DISC_MIN_CIRCULARITY = 0.6  # Lowered from 0.7 for more tolerance
+# ROI detection parameters
+DISC_BRIGHTNESS_PERCENTILE = 90  # High percentile to capture brightest disc area
+ROI_EXPANSION = 200  # Pixels to expand in each direction from brightest point
 
 # Cup detection parameters
 CUP_BRIGHTNESS_PERCENTILE = 98
@@ -41,8 +39,8 @@ DEBUG_OUTPUT_FOLDER = "./debug_images"
 
 # Granular stage control - enable/disable individual stages
 DEBUG_STAGES = {
-    'preprocessing': True,      # Stage 1: Green channel, CLAHE, blur
-    'disc_detection': False,     # Stage 2: Disc detection steps
+    'preprocessing': False,      # Stage 1: Green channel, CLAHE, blur
+    'disc_detection': True,     # Stage 2: Disc detection steps
     'cup_detection': False,      # Stage 3: Cup detection steps
     'mask_generation': False,    # Stage 4: Combining masks
     'postprocessing': False,     # Stage 5: Final cleanup
@@ -120,34 +118,99 @@ def enable_all_debug_stages():
 # PREPROCESSING FUNCTIONS
 # ============================================================================
 
-def preprocess_image(image: np.ndarray) -> np.ndarray:
+def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Enhance image for better disc/cup detection using CLAHE and color space conversion.
+    Crop all borders, extract channels, apply CLAHE, and prepare for ROI detection.
+
+    Pipeline:
+    1. Crop ALL borders at once (black + white margins + dark borders) using grayscale CLAHE
+    2. Extract 3 channels from cropped fundus
+    3. Apply CLAHE to each channel independently
+    4. Use Green CLAHE channel for ROI detection
+    5. Apply Gaussian blur for final preprocessing
 
     Args:
         image: Input RGB image (HxWx3 numpy array)
 
     Returns:
-        Enhanced grayscale image (HxW numpy array)
+        Tuple containing:
+        - Enhanced and blurred grayscale image (Green CLAHE, Gaussian blurred) (HxW numpy array)
+        - Cropped original RGB image (HxWx3 numpy array) - only fundus tissue
     """
-    # Extract green channel (best for fundus images - optic disc is brightest here)
-    green_channel = image[:, :, 1]
-    save_debug_image(green_channel, "stage1a_green_channel.jpg", 'preprocessing')
+    # ========================================================================
+    # STAGE 1A: DETECT AND CROP ALL BORDERS (black + white margins + dark borders)
+    # ========================================================================
 
-    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    # Step 1: Convert to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Step 2: Apply basic CLAHE to help detect fundus region
+    clahe_temp = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_GRID_SIZE)
+    gray_enhanced = clahe_temp.apply(gray)
+
+    # Step 3: Detect fundus region (middle intensity range [30, 240])
+    # This excludes: black borders (<30), white margins (>240), dark borders (<30)
+    fundus_mask = cv2.inRange(gray_enhanced, 30, 240)
+
+    # Step 4: Find bounding box of fundus region
+    contours, _ = cv2.findContours(fundus_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        # Get bounding box of largest contour (fundus region)
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
+
+        # Visualize the crop boundary on original image
+        boundary_viz = image.copy()
+        cv2.rectangle(boundary_viz, (x, y), (x + w, y + h), (0, 255, 0), 3)
+        save_debug_image(boundary_viz, "stage1a_crop_all_borders.jpg", 'preprocessing')
+
+        # Crop image to fundus region only
+        image_cropped = image[y:y+h, x:x+w]
+    else:
+        # No fundus detected, use original
+        save_debug_image(image, "stage1a_crop_all_borders.jpg", 'preprocessing')
+        image_cropped = image
+
+    # ========================================================================
+    # EXTRACT AND VISUALIZE ALL 3 CHANNELS
+    # ========================================================================
+
+    # OpenCV uses BGR format, so: B=0, G=1, R=2
+    blue_channel = image_cropped[:, :, 0]
+    green_channel = image_cropped[:, :, 1]
+    red_channel = image_cropped[:, :, 2]
+
+    save_debug_image(blue_channel, "stage1b_blue_channel.jpg", 'preprocessing')
+    save_debug_image(green_channel, "stage1c_green_channel.jpg", 'preprocessing')
+    save_debug_image(red_channel, "stage1d_red_channel.jpg", 'preprocessing')
+
+    # ========================================================================
+    # APPLY CLAHE TO EACH CHANNEL SEPARATELY
+    # ========================================================================
+
     clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_GRID_SIZE)
-    enhanced = clahe.apply(green_channel)
-    save_debug_image(enhanced, "stage1b_clahe_enhanced.jpg", 'preprocessing')
 
-    # Apply Gaussian blur for noise reduction
+    blue_clahe = clahe.apply(blue_channel)
+    green_clahe = clahe.apply(green_channel)
+    red_clahe = clahe.apply(red_channel)
+
+    save_debug_image(blue_clahe, "stage1e_blue_clahe.jpg", 'preprocessing')
+    save_debug_image(green_clahe, "stage1f_green_clahe.jpg", 'preprocessing')
+    save_debug_image(red_clahe, "stage1g_red_clahe.jpg", 'preprocessing')
+
+    # Use green channel for ROI detection (standard)
+    enhanced = green_clahe
+
+    # Apply Gaussian blur
     blurred = cv2.GaussianBlur(enhanced, GAUSSIAN_BLUR_KERNEL, 0)
-    save_debug_image(blurred, "stage1c_final_preprocessed.jpg", 'preprocessing')
+    save_debug_image(blurred, "stage1h_final_preprocessed.jpg", 'preprocessing')
 
-    return blurred
+    return blurred, image_cropped
 
 
 # ============================================================================
-# DISC DETECTION FUNCTIONS
+# ROI DETECTION FUNCTIONS
 # ============================================================================
 
 def detect_optic_disc(enhanced_image: np.ndarray,
@@ -155,117 +218,59 @@ def detect_optic_disc(enhanced_image: np.ndarray,
                                                              Optional[Tuple[int, int]],
                                                              Optional[int]]:
     """
-    Identify optic disc region and return mask with center and radius.
+    Detect ROI around brightest point (potential optic disc location).
+
+    Note: This function stops at ROI extraction.
+    No disc segmentation or contour filtering is performed.
 
     Args:
-        enhanced_image: Enhanced grayscale image from preprocessing
-        original_image: Original RGB image for reference
+        enhanced_image: Enhanced grayscale image (Green CLAHE, blurred, fundus only)
+        original_image: Original RGB image (fully cropped to fundus only)
 
     Returns:
-        Tuple containing:
-        - Binary disc mask (HxW numpy array, 0/255) or None if not found
-        - Disc center coordinates (x, y) or None
-        - Disc radius (int) or None
+        Tuple containing (None, None, None) - only generates debug images
     """
     h, w = enhanced_image.shape
 
-    # Step 1: First, create retinal area mask (exclude bright background)
-    # Pixels with value 255 or very close to it are background
-    _, background_mask = cv2.threshold(enhanced_image, 250, 255, cv2.THRESH_BINARY)
-    save_debug_image(background_mask, "stage2a_background_mask.jpg", 'disc_detection')
+    # ========================================================================
+    # STEP 1: Find brightest pixel in fundus
+    # ========================================================================
 
-    retinal_mask = cv2.bitwise_not(background_mask)
+    # Find the brightest pixel in the image (likely disc location)
+    # Image is already cropped to fundus only, so no masking needed
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(enhanced_image)
+    brightest_x, brightest_y = max_loc
 
-    # Apply morphology to clean up retinal mask
-    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
-    retinal_mask = cv2.morphologyEx(retinal_mask, cv2.MORPH_CLOSE, kernel_large)
-    retinal_mask = cv2.morphologyEx(retinal_mask, cv2.MORPH_OPEN, kernel_large)
-    save_debug_image(retinal_mask, "stage2b_retinal_mask.jpg", 'disc_detection')
+    # Visualize brightest point
+    bright_viz = cv2.cvtColor(enhanced_image, cv2.COLOR_GRAY2BGR)
+    cv2.circle(bright_viz, (brightest_x, brightest_y), 15, (0, 0, 255), -1)  # Red dot
+    cv2.circle(bright_viz, (brightest_x, brightest_y), 20, (0, 255, 0), 3)   # Green circle
+    save_debug_image(bright_viz, "stage2a_brightest_point.jpg", 'disc_detection')
 
-    # Step 2: Within retinal area, find bright regions (optic disc)
-    # Mask the enhanced image to retinal area only
-    retinal_only = cv2.bitwise_and(enhanced_image, enhanced_image, mask=retinal_mask)
-    save_debug_image(retinal_only, "stage2c_retinal_only.jpg", 'disc_detection')
+    # ========================================================================
+    # STEP 2: Expand ROI from brightest point
+    # ========================================================================
 
-    # Get pixels within retinal area
-    retinal_pixels = enhanced_image[retinal_mask > 0]
-    if len(retinal_pixels) == 0:
-        return None, None, None
+    # Calculate ROI boundaries (ensure within image bounds)
+    roi_x1 = max(0, brightest_x - ROI_EXPANSION)
+    roi_y1 = max(0, brightest_y - ROI_EXPANSION)
+    roi_x2 = min(w, brightest_x + ROI_EXPANSION)
+    roi_y2 = min(h, brightest_y + ROI_EXPANSION)
 
-    # Use high percentile within retinal area to find optic disc
-    threshold_value = np.percentile(retinal_pixels, 90)
+    # Visualize ROI location (green box, no red dot)
+    roi_viz = cv2.cvtColor(enhanced_image, cv2.COLOR_GRAY2BGR)
+    cv2.rectangle(roi_viz, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 3)
+    save_debug_image(roi_viz, "stage2b_roi_location.jpg", 'disc_detection')
 
-    _, binary = cv2.threshold(retinal_only, threshold_value, 255, cv2.THRESH_BINARY)
-    save_debug_image(binary, "stage2d_disc_threshold.jpg", 'disc_detection')
+    # ========================================================================
+    # STEP 3: Extract ROI
+    # ========================================================================
 
-    # Step 2: Apply morphological closing to fill gaps
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    save_debug_image(closed, "stage2e_disc_morphology.jpg", 'disc_detection')
+    roi_enhanced = enhanced_image[roi_y1:roi_y2, roi_x1:roi_x2]
+    save_debug_image(roi_enhanced, "stage2c_roi_extracted.jpg", 'disc_detection')
 
-    # Step 3: Find contours
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    if not contours:
-        return None, None, None
-
-    # Step 4: Filter and select best candidate
-    valid_contours = []
-
-    for contour in contours:
-        area = cv2.contourArea(contour)
-
-        # Calculate equivalent radius
-        if area == 0:
-            continue
-        radius = int(np.sqrt(area / np.pi))
-
-        # Filter by radius range
-        if radius < DISC_MIN_RADIUS or radius > DISC_MAX_RADIUS:
-            continue
-
-        # Calculate circularity
-        perimeter = cv2.arcLength(contour, True)
-        if perimeter == 0:
-            continue
-        circularity = 4 * np.pi * area / (perimeter * perimeter)
-
-        # Filter by circularity
-        if circularity < DISC_MIN_CIRCULARITY:
-            continue
-
-        # Get center
-        M = cv2.moments(contour)
-        if M["m00"] == 0:
-            continue
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
-
-        # Filter by location (not too close to edges)
-        margin = 50
-        if cx < margin or cx > w - margin or cy < margin or cy > h - margin:
-            continue
-
-        valid_contours.append({
-            'contour': contour,
-            'area': area,
-            'center': (cx, cy),
-            'radius': radius,
-            'circularity': circularity
-        })
-
-    if not valid_contours:
-        return None, None, None
-
-    # Step 5: Select largest valid contour as disc
-    best_disc = max(valid_contours, key=lambda x: x['area'])
-
-    # Step 6: Create disc mask
-    disc_mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.drawContours(disc_mask, [best_disc['contour']], -1, 255, -1)
-    save_debug_image(disc_mask, "stage2f_disc_mask_final.jpg", 'disc_detection')
-
-    return disc_mask, best_disc['center'], best_disc['radius']
+    # Pipeline stops here (no further processing) - return None values
+    return None, None, None
 
 
 # ============================================================================
@@ -522,11 +527,11 @@ def process_fundus_image(image: np.ndarray) -> Optional[np.ndarray]:
         or None if segmentation fails
     """
     try:
-        # Step 1: Preprocess image
-        enhanced_image = preprocess_image(image)
+        # Step 1: Preprocess image (crops borders automatically)
+        enhanced_image, image_cropped = preprocess_image(image)
 
         # Step 2: Detect optic disc
-        disc_mask, disc_center, disc_radius = detect_optic_disc(enhanced_image, image)
+        disc_mask, disc_center, disc_radius = detect_optic_disc(enhanced_image, image_cropped)
 
         if disc_mask is None:
             print("Error: Could not detect optic disc")
@@ -547,7 +552,7 @@ def process_fundus_image(image: np.ndarray) -> Optional[np.ndarray]:
         final_mask = postprocess_mask(mask)
 
         # Step 6: Generate debug overlays if enabled
-        generate_debug_overlays(image, disc_mask, cup_mask, final_mask)
+        generate_debug_overlays(image_cropped, disc_mask, cup_mask, final_mask)
 
         return final_mask
 

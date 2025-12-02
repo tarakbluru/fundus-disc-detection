@@ -1,0 +1,5 @@
+# Streamlit Configuration
+# Disable file watcher to avoid Windows permission errors with Dropbox
+
+[server]
+fileWatcherType = "none"
