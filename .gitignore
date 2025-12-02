@@ -3,8 +3,11 @@
 # ============================================================================
 # Image and Output Folders
 # ============================================================================
-input_images/
-output_masks/
+# Ignore contents but keep folders with .gitkeep
+input_images/*
+!input_images/.gitkeep
+output_masks/*
+!output_masks/.gitkeep
 debug_images/
 debug_output/
 ref_images/
