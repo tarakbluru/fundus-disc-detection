@@ -39,6 +39,12 @@ if not image_files:
     st.error(f"No images found in {input_folder}")
     st.stop()
 
+# Initialize session state for slider values (preserve across image changes)
+if 'disc_percentile' not in st.session_state:
+    st.session_state.disc_percentile = 90
+if 'roi_expansion' not in st.session_state:
+    st.session_state.roi_expansion = 200
+
 # Image selection
 selected_image = st.sidebar.selectbox(
     "Select Image",
@@ -52,9 +58,10 @@ disc_percentile = st.sidebar.slider(
     "Disc Brightness Percentile",
     min_value=70,
     max_value=99,
-    value=90,
+    value=st.session_state.disc_percentile,
     step=1,
-    help="Higher = only brightest pixels (more selective)"
+    help="Higher = only brightest pixels (more selective)",
+    key='disc_percentile'
 )
 
 st.sidebar.subheader("Stage 2: ROI Settings")
@@ -62,9 +69,10 @@ roi_expansion = st.sidebar.slider(
     "ROI Expansion (pixels)",
     min_value=100,
     max_value=400,
-    value=200,
+    value=st.session_state.roi_expansion,
     step=25,
-    help="Distance to expand from brightest point in each direction"
+    help="Distance to expand from brightest point in each direction",
+    key='roi_expansion'
 )
 
 # Process button

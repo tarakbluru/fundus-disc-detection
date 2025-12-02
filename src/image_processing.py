@@ -34,13 +34,13 @@ MORPH_KERNEL_SIZE = 5
 MIN_HOLE_SIZE = 100
 
 # Debug configuration
-DEBUG_MODE = True  # Master switch - set to True to enable debug output
+DEBUG_MODE = False  # Master switch - set to True to enable debug output
 DEBUG_OUTPUT_FOLDER = "./debug_images"
 
 # Granular stage control - enable/disable individual stages
 DEBUG_STAGES = {
     'preprocessing': False,      # Stage 1: Green channel, CLAHE, blur
-    'disc_detection': True,     # Stage 2: Disc detection steps
+    'disc_detection': False,     # Stage 2: Disc detection steps
     'cup_detection': False,      # Stage 3: Cup detection steps
     'mask_generation': False,    # Stage 4: Combining masks
     'postprocessing': False,     # Stage 5: Final cleanup
@@ -141,8 +141,8 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     # STAGE 1A: DETECT AND CROP ALL BORDERS (black + white margins + dark borders)
     # ========================================================================
 
-    # Step 1: Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Step 1: Convert to grayscale (input is RGB from web app)
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
     # Step 2: Apply basic CLAHE to help detect fundus region
     clahe_temp = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_GRID_SIZE)
@@ -163,23 +163,27 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # Visualize the crop boundary on original image
         boundary_viz = image.copy()
         cv2.rectangle(boundary_viz, (x, y), (x + w, y + h), (0, 255, 0), 3)
-        save_debug_image(boundary_viz, "stage1a_crop_all_borders.jpg", 'preprocessing')
+        # Convert RGB to BGR for cv2.imwrite
+        boundary_viz_bgr = cv2.cvtColor(boundary_viz, cv2.COLOR_RGB2BGR)
+        save_debug_image(boundary_viz_bgr, "stage1a_crop_all_borders.jpg", 'preprocessing')
 
         # Crop image to fundus region only
         image_cropped = image[y:y+h, x:x+w]
     else:
         # No fundus detected, use original
-        save_debug_image(image, "stage1a_crop_all_borders.jpg", 'preprocessing')
+        # Convert RGB to BGR for cv2.imwrite
+        image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        save_debug_image(image_bgr, "stage1a_crop_all_borders.jpg", 'preprocessing')
         image_cropped = image
 
     # ========================================================================
     # EXTRACT AND VISUALIZE ALL 3 CHANNELS
     # ========================================================================
 
-    # OpenCV uses BGR format, so: B=0, G=1, R=2
-    blue_channel = image_cropped[:, :, 0]
+    # Image is in RGB format from web app, so: R=0, G=1, B=2
+    red_channel = image_cropped[:, :, 0]
     green_channel = image_cropped[:, :, 1]
-    red_channel = image_cropped[:, :, 2]
+    blue_channel = image_cropped[:, :, 2]
 
     save_debug_image(blue_channel, "stage1b_blue_channel.jpg", 'preprocessing')
     save_debug_image(green_channel, "stage1c_green_channel.jpg", 'preprocessing')
