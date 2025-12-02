@@ -1,0 +1,9 @@
+# Retinal Fundus Image Processing - Optic Disc/Cup Segmentation
+# Python package dependencies
+
+# Core image processing
+opencv-python-headless==4.12.0.88
+numpy==2.2.6
+
+# Additional image I/O support
+pillow==12.0.0
