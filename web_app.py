@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import os
 import glob
-from PIL import Image
 from src import image_processing
 
 # Page configuration
@@ -112,31 +111,16 @@ if st.session_state.process_trigger:
         # Set new parameters
         image_processing.DISC_BRIGHTNESS_PERCENTILE = disc_percentile
 
-        # Enable debug mode
-        image_processing.DEBUG_MODE = True
-        image_processing.DEBUG_STAGES['preprocessing'] = True
-        image_processing.DEBUG_STAGES['disc_detection'] = True
+        # No need to enable debug mode - we're using return_debug_images parameter
 
-        # Clear previous debug images
-        debug_folder = "./debug_images"
-        if os.path.exists(debug_folder):
-            for f in glob.glob(os.path.join(debug_folder, "stage*.jpg")):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-
-        # Enable preprocessing debug
-        image_processing.DEBUG_STAGES['preprocessing'] = True
-
-        # Preprocess (automatically crops borders)
-        enhanced, original_cropped = image_processing.preprocess_image(original_rgb)
+        # Preprocess (automatically crops borders) - get debug images in memory
+        enhanced, original_cropped, stage1_images = image_processing.preprocess_image(original_rgb, return_debug_images=True)
 
         # Set ROI_EXPANSION parameter
         image_processing.ROI_EXPANSION = roi_expansion
 
-        # ROI detection (returns None values - we stop at ROI threshold)
-        _, _, _ = image_processing.detect_optic_disc(enhanced, original_cropped)
+        # ROI detection - get debug images in memory
+        _, _, _, stage2_images = image_processing.detect_optic_disc(enhanced, original_cropped, return_debug_images=True)
 
         # Restore original parameters
         image_processing.DISC_BRIGHTNESS_PERCENTILE = original_percentile
@@ -150,11 +134,9 @@ if st.session_state.process_trigger:
     # Row 0: Crop All Borders (in column layout)
     st.markdown("**Crop All Borders**")
     st1_row0 = st.columns(3)
-    filepath = os.path.join(debug_folder, "stage1a_crop_all_borders.jpg")
     with st1_row0[0]:
-        if os.path.exists(filepath):
-            img = Image.open(filepath)
-            st.image(img, use_container_width=True)
+        if 'stage1a_crop_all_borders' in stage1_images:
+            st.image(stage1_images['stage1a_crop_all_borders'], use_container_width=True)
         else:
             st.warning("Not generated")
 
@@ -164,17 +146,15 @@ if st.session_state.process_trigger:
     st.markdown("**Raw Channels (from cropped fundus)**")
     st1_row1 = st.columns(3)
     raw_channels = [
-        ("stage1b_blue_channel.jpg", "Blue"),
-        ("stage1c_green_channel.jpg", "Green"),
-        ("stage1d_red_channel.jpg", "Red")
+        ("stage1b_blue_channel", "Blue"),
+        ("stage1c_green_channel", "Green"),
+        ("stage1d_red_channel", "Red")
     ]
-    for idx, (filename, title) in enumerate(raw_channels):
-        filepath = os.path.join(debug_folder, filename)
+    for idx, (key, title) in enumerate(raw_channels):
         with st1_row1[idx]:
             st.markdown(f"**{title}**")
-            if os.path.exists(filepath):
-                img = Image.open(filepath)
-                st.image(img, use_container_width=True)
+            if key in stage1_images:
+                st.image(stage1_images[key], use_container_width=True, channels='GRAY')
             else:
                 st.warning("Not generated")
 
@@ -182,28 +162,25 @@ if st.session_state.process_trigger:
     st.markdown("**CLAHE Enhanced Channels**")
     st1_row2 = st.columns(3)
     clahe_channels = [
-        ("stage1e_blue_clahe.jpg", "Blue CLAHE"),
-        ("stage1f_green_clahe.jpg", "Green CLAHE"),
-        ("stage1g_red_clahe.jpg", "Red CLAHE")
+        ("stage1e_blue_clahe", "Blue CLAHE"),
+        ("stage1f_green_clahe", "Green CLAHE"),
+        ("stage1g_red_clahe", "Red CLAHE")
     ]
-    for idx, (filename, title) in enumerate(clahe_channels):
-        filepath = os.path.join(debug_folder, filename)
+    for idx, (key, title) in enumerate(clahe_channels):
         with st1_row2[idx]:
             st.markdown(f"**{title}**")
-            if os.path.exists(filepath):
-                img = Image.open(filepath)
-                st.image(img, use_container_width=True)
+            if key in stage1_images:
+                st.image(stage1_images[key], use_container_width=True, channels='GRAY')
             else:
                 st.warning("Not generated")
 
     # Row 3: Final Preprocessed (in column layout)
     st.markdown("**Final Preprocessed**")
     st1_row3 = st.columns(3)
-    filepath = os.path.join(debug_folder, "stage1h_final_preprocessed.jpg")
     with st1_row3[0]:
-        if os.path.exists(filepath):
-            img = Image.open(filepath)
-            st.image(img, use_container_width=True, caption=f"{img.size[0]}x{img.size[1]}px")
+        if 'stage1h_final_preprocessed' in stage1_images:
+            img = stage1_images['stage1h_final_preprocessed']
+            st.image(img, use_container_width=True, channels='GRAY', caption=f"{img.shape[1]}x{img.shape[0]}px")
         else:
             st.warning("Not generated")
 
@@ -212,25 +189,24 @@ if st.session_state.process_trigger:
     # Stage 2: ROI Detection
     st.subheader("🔍 Stage 2: ROI Detection (on cropped fundus)")
     stage2_files = [
-        ("stage2a_brightest_point.jpg", "Brightest Point"),
-        ("stage2b_roi_location.jpg", "ROI Location"),
-        ("stage2c_roi_extracted.jpg", "ROI Extracted")
+        ("stage2a_brightest_point", "Brightest Point"),
+        ("stage2b_roi_location", "ROI Location"),
+        ("stage2c_roi_extracted", "ROI Extracted")
     ]
 
     # Display in 3 columns (3 images)
     st2_row1 = st.columns(3)
 
-    for idx, (filename, title) in enumerate(stage2_files):
-        filepath = os.path.join(debug_folder, filename)
+    for idx, (key, title) in enumerate(stage2_files):
         col = st2_row1[idx]
 
         with col:
             st.markdown(f"**{title}**")
-            if os.path.exists(filepath):
-                img = Image.open(filepath)
+            if key in stage2_images:
+                img = stage2_images[key]
                 # For ROI extracted image, show at true size (no scaling)
-                if filename == "stage2c_roi_extracted.jpg":
-                    st.image(img, width=img.size[0], caption=f"Actual size: {img.size[0]}x{img.size[1]}px")
+                if key == "stage2c_roi_extracted":
+                    st.image(img, channels='GRAY', caption=f"Actual size: {img.shape[1]}x{img.shape[0]}px")
                 else:
                     st.image(img, use_container_width=True)
             else:

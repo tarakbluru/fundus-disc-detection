@@ -118,7 +118,7 @@ def enable_all_debug_stages():
 # PREPROCESSING FUNCTIONS
 # ============================================================================
 
-def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def preprocess_image(image: np.ndarray, return_debug_images: bool = False) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Crop all borders, extract channels, apply CLAHE, and prepare for ROI detection.
 
@@ -131,12 +131,15 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
     Args:
         image: Input RGB image (HxWx3 numpy array)
+        return_debug_images: If True, return debug images dict (default: False)
 
     Returns:
         Tuple containing:
         - Enhanced and blurred grayscale image (Green CLAHE, Gaussian blurred) (HxW numpy array)
         - Cropped original RGB image (HxWx3 numpy array) - only fundus tissue
+        - Debug images dict (empty if return_debug_images=False)
     """
+    debug_images = {}
     # ========================================================================
     # STAGE 1A: DETECT AND CROP ALL BORDERS (black + white margins + dark borders)
     # ========================================================================
@@ -163,17 +166,23 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # Visualize the crop boundary on original image
         boundary_viz = image.copy()
         cv2.rectangle(boundary_viz, (x, y), (x + w, y + h), (0, 255, 0), 3)
-        # Convert RGB to BGR for cv2.imwrite
-        boundary_viz_bgr = cv2.cvtColor(boundary_viz, cv2.COLOR_RGB2BGR)
-        save_debug_image(boundary_viz_bgr, "stage1a_crop_all_borders.jpg", 'preprocessing')
+        if return_debug_images:
+            debug_images['stage1a_crop_all_borders'] = boundary_viz.copy()
+        else:
+            # Convert RGB to BGR for cv2.imwrite
+            boundary_viz_bgr = cv2.cvtColor(boundary_viz, cv2.COLOR_RGB2BGR)
+            save_debug_image(boundary_viz_bgr, "stage1a_crop_all_borders.jpg", 'preprocessing')
 
         # Crop image to fundus region only
         image_cropped = image[y:y+h, x:x+w]
     else:
         # No fundus detected, use original
-        # Convert RGB to BGR for cv2.imwrite
-        image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        save_debug_image(image_bgr, "stage1a_crop_all_borders.jpg", 'preprocessing')
+        if return_debug_images:
+            debug_images['stage1a_crop_all_borders'] = image.copy()
+        else:
+            # Convert RGB to BGR for cv2.imwrite
+            image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            save_debug_image(image_bgr, "stage1a_crop_all_borders.jpg", 'preprocessing')
         image_cropped = image
 
     # ========================================================================
@@ -185,9 +194,14 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     green_channel = image_cropped[:, :, 1]
     blue_channel = image_cropped[:, :, 2]
 
-    save_debug_image(blue_channel, "stage1b_blue_channel.jpg", 'preprocessing')
-    save_debug_image(green_channel, "stage1c_green_channel.jpg", 'preprocessing')
-    save_debug_image(red_channel, "stage1d_red_channel.jpg", 'preprocessing')
+    if return_debug_images:
+        debug_images['stage1b_blue_channel'] = blue_channel.copy()
+        debug_images['stage1c_green_channel'] = green_channel.copy()
+        debug_images['stage1d_red_channel'] = red_channel.copy()
+    else:
+        save_debug_image(blue_channel, "stage1b_blue_channel.jpg", 'preprocessing')
+        save_debug_image(green_channel, "stage1c_green_channel.jpg", 'preprocessing')
+        save_debug_image(red_channel, "stage1d_red_channel.jpg", 'preprocessing')
 
     # ========================================================================
     # APPLY CLAHE TO EACH CHANNEL SEPARATELY
@@ -199,18 +213,27 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     green_clahe = clahe.apply(green_channel)
     red_clahe = clahe.apply(red_channel)
 
-    save_debug_image(blue_clahe, "stage1e_blue_clahe.jpg", 'preprocessing')
-    save_debug_image(green_clahe, "stage1f_green_clahe.jpg", 'preprocessing')
-    save_debug_image(red_clahe, "stage1g_red_clahe.jpg", 'preprocessing')
+    if return_debug_images:
+        debug_images['stage1e_blue_clahe'] = blue_clahe.copy()
+        debug_images['stage1f_green_clahe'] = green_clahe.copy()
+        debug_images['stage1g_red_clahe'] = red_clahe.copy()
+    else:
+        save_debug_image(blue_clahe, "stage1e_blue_clahe.jpg", 'preprocessing')
+        save_debug_image(green_clahe, "stage1f_green_clahe.jpg", 'preprocessing')
+        save_debug_image(red_clahe, "stage1g_red_clahe.jpg", 'preprocessing')
 
     # Use green channel for ROI detection (standard)
     enhanced = green_clahe
 
     # Apply Gaussian blur
     blurred = cv2.GaussianBlur(enhanced, GAUSSIAN_BLUR_KERNEL, 0)
-    save_debug_image(blurred, "stage1h_final_preprocessed.jpg", 'preprocessing')
 
-    return blurred, image_cropped
+    if return_debug_images:
+        debug_images['stage1h_final_preprocessed'] = blurred.copy()
+    else:
+        save_debug_image(blurred, "stage1h_final_preprocessed.jpg", 'preprocessing')
+
+    return blurred, image_cropped, debug_images
 
 
 # ============================================================================
@@ -218,9 +241,11 @@ def preprocess_image(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 # ============================================================================
 
 def detect_optic_disc(enhanced_image: np.ndarray,
-                      original_image: np.ndarray) -> Tuple[Optional[np.ndarray],
+                      original_image: np.ndarray,
+                      return_debug_images: bool = False) -> Tuple[Optional[np.ndarray],
                                                              Optional[Tuple[int, int]],
-                                                             Optional[int]]:
+                                                             Optional[int],
+                                                             dict]:
     """
     Detect ROI around brightest point (potential optic disc location).
 
@@ -230,10 +255,12 @@ def detect_optic_disc(enhanced_image: np.ndarray,
     Args:
         enhanced_image: Enhanced grayscale image (Green CLAHE, blurred, fundus only)
         original_image: Original RGB image (fully cropped to fundus only)
+        return_debug_images: If True, return debug images dict (default: False)
 
     Returns:
-        Tuple containing (None, None, None) - only generates debug images
+        Tuple containing (None, None, None, debug_images_dict)
     """
+    debug_images = {}
     h, w = enhanced_image.shape
 
     # ========================================================================
@@ -249,7 +276,13 @@ def detect_optic_disc(enhanced_image: np.ndarray,
     bright_viz = cv2.cvtColor(enhanced_image, cv2.COLOR_GRAY2BGR)
     cv2.circle(bright_viz, (brightest_x, brightest_y), 15, (0, 0, 255), -1)  # Red dot
     cv2.circle(bright_viz, (brightest_x, brightest_y), 20, (0, 255, 0), 3)   # Green circle
-    save_debug_image(bright_viz, "stage2a_brightest_point.jpg", 'disc_detection')
+
+    if return_debug_images:
+        # Convert BGR to RGB for Streamlit
+        bright_viz_rgb = cv2.cvtColor(bright_viz, cv2.COLOR_BGR2RGB)
+        debug_images['stage2a_brightest_point'] = bright_viz_rgb.copy()
+    else:
+        save_debug_image(bright_viz, "stage2a_brightest_point.jpg", 'disc_detection')
 
     # ========================================================================
     # STEP 2: Expand ROI from brightest point
@@ -264,17 +297,27 @@ def detect_optic_disc(enhanced_image: np.ndarray,
     # Visualize ROI location (green box, no red dot)
     roi_viz = cv2.cvtColor(enhanced_image, cv2.COLOR_GRAY2BGR)
     cv2.rectangle(roi_viz, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 3)
-    save_debug_image(roi_viz, "stage2b_roi_location.jpg", 'disc_detection')
+
+    if return_debug_images:
+        # Convert BGR to RGB for Streamlit
+        roi_viz_rgb = cv2.cvtColor(roi_viz, cv2.COLOR_BGR2RGB)
+        debug_images['stage2b_roi_location'] = roi_viz_rgb.copy()
+    else:
+        save_debug_image(roi_viz, "stage2b_roi_location.jpg", 'disc_detection')
 
     # ========================================================================
     # STEP 3: Extract ROI
     # ========================================================================
 
     roi_enhanced = enhanced_image[roi_y1:roi_y2, roi_x1:roi_x2]
-    save_debug_image(roi_enhanced, "stage2c_roi_extracted.jpg", 'disc_detection')
+
+    if return_debug_images:
+        debug_images['stage2c_roi_extracted'] = roi_enhanced.copy()
+    else:
+        save_debug_image(roi_enhanced, "stage2c_roi_extracted.jpg", 'disc_detection')
 
     # Pipeline stops here (no further processing) - return None values
-    return None, None, None
+    return None, None, None, debug_images
 
 
 # ============================================================================
@@ -532,10 +575,10 @@ def process_fundus_image(image: np.ndarray) -> Optional[np.ndarray]:
     """
     try:
         # Step 1: Preprocess image (crops borders automatically)
-        enhanced_image, image_cropped = preprocess_image(image)
+        enhanced_image, image_cropped, _ = preprocess_image(image)
 
         # Step 2: Detect optic disc
-        disc_mask, disc_center, disc_radius = detect_optic_disc(enhanced_image, image_cropped)
+        disc_mask, disc_center, disc_radius, _ = detect_optic_disc(enhanced_image, image_cropped)
 
         if disc_mask is None:
             print("Error: Could not detect optic disc")
